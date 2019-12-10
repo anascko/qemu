@@ -9,7 +9,7 @@
 # This work is licensed under the terms of the GNU GPL, version 2 or
 # later.  See the COPYING file in the top-level directory.
 
-
+import tempfile
 from avocado_qemu import Test
 
 from avocado.utils import network
@@ -30,10 +30,8 @@ class Migration(Test):
             self.cancel('Failed to find a free port')
         return port
 
-
-    def test_migration_with_tcp_localhost(self):
+    def migration_process(self, dest_uri):
         source_vm = self.get_vm()
-        dest_uri = 'tcp:localhost:%u' % self._get_free_port()
         dest_vm = self.get_vm('-incoming', dest_uri)
         dest_vm.launch()
         source_vm.launch()
@@ -48,3 +46,13 @@ class Migration(Test):
         self.assertEqual(source_vm.command('query-migrate')['status'], 'completed')
         self.assertEqual(dest_vm.command('query-status')['status'], 'running')
         self.assertEqual(source_vm.command('query-status')['status'], 'postmigrate')
+
+
+    def test_migration_with_tcp_localhost(self):
+        dest_uri = 'tcp:localhost:%u' % self._get_free_port()
+        self.migration_process(dest_uri)
+
+    def test_migration_with_unix(self):
+        with tempfile.TemporaryDirectory(prefix='socket_') as socket_path:
+            dest_uri = 'unix:%s/qemu-test.sock' % socket_path
+            self.migration_process(dest_uri)
