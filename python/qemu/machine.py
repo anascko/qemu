@@ -154,6 +154,12 @@ class QEMUMachine(object):
         self._args.append(','.join(options))
         return self
 
+    def get_sock_fd(self):
+        assert self._qmp.is_scm_available()
+        if hasattr(os, 'set_inheritable'):
+            os.set_inheritable(self._qmp.get_sock_fd(), True)
+        return self._qmp.get_sock_fd()
+
     def send_fd_scm(self, fd=None, file_path=None):
         """
         Send an fd or file_path to socket_scm_helper.
