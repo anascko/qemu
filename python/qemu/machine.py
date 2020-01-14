@@ -24,6 +24,7 @@ import subprocess
 import shutil
 import socket
 import tempfile
+import array
 
 from . import qmp
 
@@ -154,19 +155,35 @@ class QEMUMachine(object):
         self._args.append(','.join(options))
         return self
 
-    def send_fd_scm(self, fd=None, file_path=None):
-        """
-        Send an fd or file_path to socket_scm_helper.
+    def _send_fds(self, sock, msg, fds):
+        return sock.sendmsg([msg], [(socket.SOL_SOCKET, socket.SCM_RIGHTS, array.array("i", fds))])
 
-        Exactly one of fd and file_path must be given.
+    def _recv_fds(self, sock, msglen=8192, maxfds=4096):
+        fds = array.array("i")
+        msg, ancdata, flags, addr = sock.recvmsg(msglen, socket.CMSG_LEN(maxfds * fds.itemsize))
+        for cmsg_level, cmsg_type, cmsg_data in ancdata:
+            if cmsg_level == socket.SOL_SOCKET and cmsg_type == socket.SCM_RIGHTS:
+                fds.frombytes(cmsg_data[:len(cmsg_data) - (len(cmsg_data) % fds.itemsize)])
+        return msg, list(fds)
+
+    def send_fd_scm(self, fd=None, file_path=None, data=None):
+        """
+        Can be used in two different cases.
+        Send an fd or file_path to socket_scm_helper or
+        provide data and fd to send it to the socket.
+
+        Exactly one of fd and file_path must be given to the case of socket_scm_helper
         If it is file_path, the helper will open that file and pass its own fd.
+
+        To second one need adds data that include a QMP request and fd
         """
         # In iotest.py, the qmp should always use unix socket.
         assert self._qmp.is_scm_available()
-        if self._socket_scm_helper is None:
-            raise QEMUMachineError("No path to socket_scm_helper set")
-        if not os.path.exists(self._socket_scm_helper):
-            raise QEMUMachineError("%s does not exist" %
+        if data is None:
+            if self._socket_scm_helper is None:
+                raise QEMUMachineError("No path to socket_scm_helper set or data not provided")
+            if not os.path.exists(self._socket_scm_helper):
+                raise QEMUMachineError("%s does not exist" %
                                    self._socket_scm_helper)
 
         # This did not exist before 3.4, but since then it is
@@ -176,24 +193,31 @@ class QEMUMachine(object):
             if fd is not None:
                 os.set_inheritable(fd, True)
 
-        fd_param = ["%s" % self._socket_scm_helper,
-                    "%d" % self._qmp.get_sock_fd()]
+        if data is None:
+            fd_param = ["%s" % self._socket_scm_helper,
+                        "%d" % self._qmp.get_sock_fd()]
+            if file_path is not None:
+                assert fd is None
+                fd_param.append(file_path)
+            else:
+                assert fd is not None
+                fd_param.append(str(fd))
 
-        if file_path is not None:
-            assert fd is None
-            fd_param.append(file_path)
+            devnull = open(os.path.devnull, 'rb')
+            proc = subprocess.Popen(fd_param, stdin=devnull, stdout=subprocess.PIPE,
+                                    stderr=subprocess.STDOUT, close_fds=False)
+            output = proc.communicate()[0]
+            if output:
+                LOG.debug(output)
+
+            return proc.returncode
+
         else:
-            assert fd is not None
-            fd_param.append(str(fd))
-
-        devnull = open(os.path.devnull, 'rb')
-        proc = subprocess.Popen(fd_param, stdin=devnull, stdout=subprocess.PIPE,
-                                stderr=subprocess.STDOUT, close_fds=False)
-        output = proc.communicate()[0]
-        if output:
-            LOG.debug(output)
-
-        return proc.returncode
+            sock_fd = socket.fromfd(self._qmp.get_sock_fd(), socket.AF_UNIX, socket.SOCK_STREAM)
+            fds_param = [fd, self._qmp.get_sock_fd()]
+            self._send_fds(sock_fd, data, fds_param)
+            self._recv_fds(sock_fd)
+            return self
 
     @staticmethod
     def _remove_if_exists(path):
