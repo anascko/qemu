@@ -9,14 +9,18 @@
 # This work is licensed under the terms of the GNU GPL, version 2 or
 # later.  See the COPYING file in the top-level directory.
 
+import re
 import array
 import os
 import tempfile
 from socket import socketpair, fromfd, AF_UNIX, SOCK_STREAM, SCM_RIGHTS, SOL_SOCKET, CMSG_SPACE, CMSG_LEN
+
 from avocado_qemu import Test
 from avocado import skipUnless
 from avocado.utils import network
 from avocado.utils import wait
+from avocado.utils import service
+from avocado.utils import process
 from avocado.utils.path import find_command, CmdNotFoundError
 
 
@@ -64,6 +68,19 @@ class Migration(Test):
                 fds.frombytes(cmsg_data[:len(cmsg_data) - (len(cmsg_data) % fds.itemsize)])
         return msg, list(fds)
 
+    def _if_rdma_enable(self):
+        rdma_stat = service.ServiceManager()
+        rdma = rdma_stat.status('rdma')
+        return rdma
+
+
+    def _get_ip_rdma(self):
+        rxe_run = process.run('rxe_cfg -l').stdout.decode()
+        for line in rxe_run.split('\n'):
+            if re.search(r"rxe[0-9]", line):
+                ip = re.search(r"\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}", line).group()
+                return ip
+
     def test_migration_with_tcp_localhost(self):
         source_vm = self.get_vm()
         dest_uri = 'tcp:localhost:%u' % self._get_free_port()
@@ -98,9 +115,9 @@ class Migration(Test):
     @skipUnless(check_bin_path('nc'), "nc command not found on the system")
     def test_migration_with_exec(self):
         free_port = self._get_free_port()
+        source_vm = self.get_vm()
         dest_uri = 'exec:nc -l localhost %u' % free_port
         src_uri = "exec:nc localhost %u" % free_port
-        source_vm = self.get_vm()
         source_vm.launch()
         dest_vm = self.get_vm('-incoming', dest_uri)
         dest_vm.launch()
@@ -117,3 +134,14 @@ class Migration(Test):
             source_vm.qmp('migrate', uri=dest_uri)
             self.assert_migration(source_vm, dest_vm)
 
+    @skipUnless(_if_rdma_enable(None), "Unit rdma.service could not be found")
+    @skipUnless(check_bin_path('rxe_cfg'), "rxe_cfg command not found on the system")
+    @skipUnless(_get_ip_rdma(None), 'RoCE(RDMA) service or interface not configured')
+    def test_migration_with_rdma_localhost(self):
+        source_vm = self.get_vm()
+        dest_uri = 'rdma:%s:%u' % (self._get_ip_rdma(), self._get_free_port())
+        dest_vm = self.get_vm('-incoming', dest_uri)
+        dest_vm.launch()
+        source_vm.launch()
+        source_vm.qmp('migrate', uri=dest_uri)
+        self.assert_migration(source_vm, dest_vm)
