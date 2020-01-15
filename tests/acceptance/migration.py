@@ -11,7 +11,7 @@
 
 import array
 import os
-
+import tempfile
 from socket import socketpair, fromfd, AF_UNIX, SOCK_STREAM, SCM_RIGHTS, SOL_SOCKET, CMSG_SPACE, CMSG_LEN
 from avocado_qemu import Test
 from avocado import skipUnless
@@ -106,3 +106,14 @@ class Migration(Test):
         dest_vm.launch()
         source_vm.qmp('migrate', uri=src_uri)
         self.assert_migration(source_vm, dest_vm)
+
+    def test_migration_with_unix(self):
+        source_vm = self.get_vm()
+        source_vm.launch()
+        with tempfile.TemporaryDirectory(prefix='socket_') as socket_path:
+            dest_uri = 'unix:%s/qemu-test.sock' % socket_path
+            dest_vm = self.get_vm('-incoming', dest_uri)
+            dest_vm.launch()
+            source_vm.qmp('migrate', uri=dest_uri)
+            self.assert_migration(source_vm, dest_vm)
+
