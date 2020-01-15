@@ -9,13 +9,15 @@
 # This work is licensed under the terms of the GNU GPL, version 2 or
 # later.  See the COPYING file in the top-level directory.
 
-import array, os
+import array
+import os
 
 from socket import socketpair, fromfd, AF_UNIX, SOCK_STREAM, SCM_RIGHTS, SOL_SOCKET, CMSG_SPACE, CMSG_LEN
 from avocado_qemu import Test
-
+from avocado import skipUnless
 from avocado.utils import network
 from avocado.utils import wait
+from avocado.utils.path import find_command, CmdNotFoundError
 
 
 class Migration(Test):
@@ -35,6 +37,13 @@ class Migration(Test):
         self.assertEqual(dest_vm.command('query-migrate')['status'], 'completed')
         self.assertEqual(dest_vm.command('query-status')['status'], 'running')
         self.assertEqual(source_vm.command('query-status')['status'], 'postmigrate')
+
+    def check_bin_path(cmd):
+        try:
+            find_command(cmd)
+            return True
+        except CmdNotFoundError:
+            return False
 
     def _get_free_port(self):
         port = network.find_free_port()
@@ -84,4 +93,16 @@ class Migration(Test):
         dest_vm = self.get_vm('-incoming', 'fd:%s' % fd2)
         dest_vm.launch()
         source_vm.qmp('migrate', uri='fd:%s' % opaque)
+        self.assert_migration(source_vm, dest_vm)
+
+    @skipUnless(check_bin_path('nc'), "nc command not found on the system")
+    def test_migration_with_exec(self):
+        free_port = self._get_free_port()
+        dest_uri = 'exec:nc -l localhost %u' % free_port
+        src_uri = "exec:nc localhost %u" % free_port
+        source_vm = self.get_vm()
+        source_vm.launch()
+        dest_vm = self.get_vm('-incoming', dest_uri)
+        dest_vm.launch()
+        source_vm.qmp('migrate', uri=src_uri)
         self.assert_migration(source_vm, dest_vm)
