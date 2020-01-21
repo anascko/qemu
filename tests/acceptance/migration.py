@@ -32,6 +32,16 @@ class Migration(Test):
     def migration_finished(vm):
         return vm.command('query-migrate')['status'] in ('completed', 'failed')
 
+    def do_migrate(self, dest_uri, src_uri=None):
+        source_vm = self.get_vm()
+        dest_vm = self.get_vm('-incoming', dest_uri)
+        dest_vm.launch()
+        if src_uri is None:
+            src_uri = dest_uri
+        source_vm.launch()
+        source_vm.qmp('migrate', uri=src_uri)
+        self.assert_migration(source_vm, dest_vm)
+
     def assert_migration(self, source_vm, dest_vm):
         wait.wait_for(self.migration_finished,
                       timeout=self.timeout,
@@ -41,13 +51,6 @@ class Migration(Test):
         self.assertEqual(dest_vm.command('query-migrate')['status'], 'completed')
         self.assertEqual(dest_vm.command('query-status')['status'], 'running')
         self.assertEqual(source_vm.command('query-status')['status'], 'postmigrate')
-
-    def check_bin_path(cmd):
-        try:
-            find_command(cmd)
-            return True
-        except CmdNotFoundError:
-            return False
 
     def _get_free_port(self):
         port = network.find_free_port()
@@ -82,13 +85,8 @@ class Migration(Test):
                 return ip
 
     def test_migration_with_tcp_localhost(self):
-        source_vm = self.get_vm()
         dest_uri = 'tcp:localhost:%u' % self._get_free_port()
-        dest_vm = self.get_vm('-incoming', dest_uri)
-        dest_vm.launch()
-        source_vm.launch()
-        source_vm.qmp('migrate', uri=dest_uri)
-        self.assert_migration(source_vm, dest_vm)
+        self.do_migrate(dest_uri)
 
     def test_migration_with_fd(self):
         opaque = 'fd-migration'
@@ -112,36 +110,21 @@ class Migration(Test):
         source_vm.qmp('migrate', uri='fd:%s' % opaque)
         self.assert_migration(source_vm, dest_vm)
 
-    @skipUnless(check_bin_path('nc'), "nc command not found on the system")
+    @skipUnless(find_command('nc', default=False), "nc command not found on the system")
     def test_migration_with_exec(self):
         free_port = self._get_free_port()
-        source_vm = self.get_vm()
         dest_uri = 'exec:nc -l localhost %u' % free_port
-        src_uri = "exec:nc localhost %u" % free_port
-        source_vm.launch()
-        dest_vm = self.get_vm('-incoming', dest_uri)
-        dest_vm.launch()
-        source_vm.qmp('migrate', uri=src_uri)
-        self.assert_migration(source_vm, dest_vm)
+        src_uri = 'exec:nc localhost %u' % free_port
+        self.do_migrate(dest_uri, src_uri)
 
     def test_migration_with_unix(self):
-        source_vm = self.get_vm()
-        source_vm.launch()
         with tempfile.TemporaryDirectory(prefix='socket_') as socket_path:
             dest_uri = 'unix:%s/qemu-test.sock' % socket_path
-            dest_vm = self.get_vm('-incoming', dest_uri)
-            dest_vm.launch()
-            source_vm.qmp('migrate', uri=dest_uri)
-            self.assert_migration(source_vm, dest_vm)
+            self.do_migrate(dest_uri)
 
     @skipUnless(_if_rdma_enable(None), "Unit rdma.service could not be found")
-    @skipUnless(check_bin_path('rxe_cfg'), "rxe_cfg command not found on the system")
+    @skipUnless(find_command('rxe_cfg', default=False), "rxe_cfg command not found on the system")
     @skipUnless(_get_ip_rdma(None), 'RoCE(RDMA) service or interface not configured')
     def test_migration_with_rdma_localhost(self):
-        source_vm = self.get_vm()
         dest_uri = 'rdma:%s:%u' % (self._get_ip_rdma(), self._get_free_port())
-        dest_vm = self.get_vm('-incoming', dest_uri)
-        dest_vm.launch()
-        source_vm.launch()
-        source_vm.qmp('migrate', uri=dest_uri)
-        self.assert_migration(source_vm, dest_vm)
+        self.do_migrate(dest_uri)
