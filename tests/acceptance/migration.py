@@ -11,7 +11,7 @@
 
 import os
 
-from socket import socketpair, AF_UNIX, SOCK_STREAM
+from socket import socketpair, AF_UNIX, SOCK_STREAM 
 from avocado_qemu import Test
 
 from avocado.utils import network
