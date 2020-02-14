@@ -11,12 +11,57 @@
 
 
 import tempfile
+import json
 from avocado_qemu import Test
 from avocado import skipUnless
 
 from avocado.utils import network
 from avocado.utils import wait
 from avocado.utils.path import find_command
+from avocado.utils.network.interfaces import NetworkInterface
+from avocado.utils.network.hosts import LocalHost
+from avocado.utils import service
+from avocado.utils import process
+
+
+def get_rdma_status():
+    """Verify the status of RDMA service.
+
+    return: True if rdma service is enabled, False otherwise.
+    """
+    rdma_stat = service.ServiceManager()
+    return bool(rdma_stat.status('rdma'))
+
+def get_interface_rdma():
+    """Get the interface name where RDMA is configured.
+
+    return: The interface name or False if none is found
+    """
+    cmd = 'rdma link show -j'
+    out = json.loads(process.getoutput(cmd))
+    try:
+        for i in out:
+            if i['state'] == 'ACTIVE':
+                return i['netdev']
+    except KeyError:
+        pass
+    return False
+
+def get_ip_rdma(interface):
+    """Get the IP address on a specific interface.
+
+    :param interface: Network interface name
+    :return: IP addresses as a list, otherwise will return False
+    """
+    local = LocalHost()
+    network_in = NetworkInterface(interface, local)
+    try:
+        ip = network_in.get_ipaddrs()
+        if ip:
+            return ip
+    except:
+        pass
+    return False
 
 
 class Migration(Test):
